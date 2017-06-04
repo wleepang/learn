@@ -23,39 +23,58 @@ Filter the list for packages with the following metadata properties:
     - Development Status >= 4 and <= 6 (may be too stringent)
     - Programming Language :: Python :: <version>
 """
+import logging
+
 from tqdm import tqdm
 import requests
 from bs4 import BeautifulSoup
 
+
+logging.basicConfig(level=logging.INFO)
+
+
+class SkippingError(Exception):
+    pass
+
+
 if __name__ == '__main__':
+
+    logging.info('retrieving packages list')
     resp = requests.get('https://pypi.python.org/simple')
     if not resp.status_code == 200:
+        logging.error('could not get packages list')
         raise RuntimeError('package index returned {}'.format(resp.status_code))
 
+    logging.info('parsing packages list')
     soup = BeautifulSoup(resp.text, 'html.parser')
+    pkgs = [link.get('href') for link in soup.find_all('a')]
+    logging.info('{} packages found'.format(len(pkgs)))
 
-    pkgs = [link.get('href') for link in tqdm(soup.find_all('a'))]
     progress = tqdm(pkgs)
     for pkg in progress:
         resp = requests.get(f'https://pypi.python.org/pypi/{pkg}/json')
         skip = f'skipping {pkg}'
         keep = f'keeping {pkg}'
-        if not resp.status_code == 200:
-            progress.set_description(f'{skip}: error retrieving metadata')
-            continue
 
-        props = resp.json()
-        info = props.get('info')
-        if not info:
-            progress.set_description(f'{skip}: no info')
-            continue
-        
-        if not info.get('summary') or info.get('summary') == 'UNKOWN':
-            progress.set_description(f'{skip}: no summary')
-            continue
+        try:
+            if not resp.status_code == 200:
+                raise SkippingError('error retrieving metadata')
 
-        if not info.get('classifiers') or not len(info.get('classifiers')):
-            progress.set_description(f'{skip}: no classifiers')
+            props = resp.json()
+            info = props.get('info')
+
+            if not info:
+                raise SkippingError('no info')
+            
+            if not info.get('summary') or info.get('summary') == 'UNKOWN':
+                raise SkippingError('no summary')
+
+            if not info.get('classifiers') or not len(info.get('classifiers')):
+                raise SkippingError('no classifiers')
+
+        except SkippingError as e:
+            reason = str(e)
+            progress.set_description(f'{skip}: {reason}')
             continue
         
         progress.set_description(f'{keep}')
